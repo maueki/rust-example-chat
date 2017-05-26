@@ -5,3 +5,4 @@ authors = ["Ueki Masaru <masaru.ueki@itage.co.jp>"]
 
 [dependencies]
 mio = "0.6"
+http-muncher = "0.3.1"
