@@ -2,6 +2,7 @@
 
 extern crate mio;
 extern crate http_muncher;
+extern crate byteorder;
 
 use std::net::SocketAddr;
 use mio::*;
@@ -15,9 +16,12 @@ use http_muncher::{Parser, ParserHandler};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[derive(PartialEq)]
+mod frame;
+
+use frame::{WebSocketFrame, OpCode};
+
 enum ClientState {
-    AwaitingHandshake,
+    AwaitingHandshake(RefCell<HttpParser>),
     HandshakeResponse,
     Connected,
 }
@@ -48,24 +52,46 @@ impl ParserHandler for HttpParser {
 struct WebSocketClient {
     socket: TcpStream,
     headers: Rc<RefCell<HashMap<String, String>>>,
-    http_parser: HttpParser,
     interest: Ready,
     state: ClientState,
 }
 
 impl WebSocketClient {
     fn read(&mut self) {
+        match self.state {
+            ClientState::AwaitingHandshake(_) => {
+                self.read_handshake();
+            },
+            ClientState::Connected => {
+                let frame = WebSocketFrame::read(&mut self.socket);
+                match frame {
+                    Ok(frame) => println!("{:?}", frame),
+                    Err(e) => println!("error while reading frame: {}", e)
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn read_handshake(&mut self) {
+
         let mut parser = Parser::request();
+
         loop {
             let mut buf = [0; 2048];
+
             match self.socket.read(&mut buf) {
                 Err(e) => {
                     println!("Error while reading socket: {:?}", e);
                     return
                 },
                 Ok(len) => {
-                    parser.parse(&mut self.http_parser, &buf[0..len]);
-                    if parser.is_upgrade() {
+                    let is_upgrade = if let ClientState::AwaitingHandshake(ref mut parser_state) = self.state {
+                        parser.parse(parser_state.get_mut(), &buf[0..len]);
+                        parser.is_upgrade()
+                    } else { false };
+
+                    if is_upgrade {
                         println!("is_upgrade()");
                         self.state = ClientState::HandshakeResponse;
 
@@ -102,12 +128,11 @@ impl WebSocketClient {
         WebSocketClient {
             socket: socket,
             headers: headers.clone(),
-            http_parser: HttpParser {
+            interest: Ready::readable(),
+            state: ClientState::AwaitingHandshake(RefCell::new(HttpParser {
                 current_key: None,
                 headers: headers.clone()
-            },
-            interest: Ready::readable(),
-            state: ClientState::AwaitingHandshake,
+            })),
         }
     }
 }
