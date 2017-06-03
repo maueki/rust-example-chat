@@ -54,6 +54,7 @@ struct WebSocketClient {
     headers: Rc<RefCell<HashMap<String, String>>>,
     interest: Ready,
     state: ClientState,
+    outgoing: Vec<WebSocketFrame>
 }
 
 impl WebSocketClient {
@@ -65,7 +66,17 @@ impl WebSocketClient {
             ClientState::Connected => {
                 let frame = WebSocketFrame::read(&mut self.socket);
                 match frame {
-                    Ok(frame) => println!("{:?}", frame),
+                    Ok(frame) => {
+                        println!("{:?}", frame);
+
+                        let reply_frame = WebSocketFrame::from("Hi threre!");
+                        self.outgoing.push(reply_frame);
+
+                        if (self.outgoing.len() > 0) {
+                            self.interest.remove(Ready::readable());
+                            self.interest.insert(Ready::writable());
+                        }
+                    },
                     Err(e) => println!("error while reading frame: {}", e)
                 }
             },
@@ -105,6 +116,29 @@ impl WebSocketClient {
     }
 
     fn write(&mut self) {
+        match self.state {
+            ClientState::HandshakeResponse => {
+                self.write_handshake();
+            },
+            ClientState::Connected => {
+                println!("sending {} frames", self.outgoing.len());
+
+                for frame in self.outgoing.iter() {
+                    if let Err(e) = frame.write(&mut self.socket) {
+                        println!("error on write: {}", e);
+                    }
+                }
+
+                self.outgoing.clear();
+
+                self.interest.remove(Ready::writable());
+                self.interest.insert(Ready::readable());
+            },
+            _ => {}
+        }
+    }
+
+    fn write_handshake(&mut self) {
         let headers = self.headers.borrow();
 
         let response_key = gen_key(&headers.get("Sec-WebSocket-Key").unwrap());
@@ -133,6 +167,7 @@ impl WebSocketClient {
                 current_key: None,
                 headers: headers.clone()
             })),
+            outgoing: Vec::new(),
         }
     }
 }
